@@ -2,41 +2,40 @@
 ///////////////////////////////////////////////////////////////////////////////////////////
 /////////////                                                                 /////////////
 /////////////    Title: Trino Connector for Power BI                          ///////////// 
-/////////////    Created by: Patrick Pichler (pichlerpatr@gmail.com)          ///////////// 
-/////////////    Website: https://github.com/pichlerpa/PowerBITrinoConnector  ///////////// 
+/////////////    Created by: DataOS                                           ///////////// 
 /////////////                                                                 ///////////// 
 ///////////////////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////////////////
 
 section Trino;
 
-[DataSource.Kind="Trino", Publish="Trino.Publish"]
+[DataSource.Kind="DataOS", Publish="DataOS.Publish"]
 shared Trino.Contents = Value.ReplaceType(TrinoImpl, TrinoType);
 
 shared TrinoType = type function (
     Host as (type text meta [
         DataSource.Path = true,
         Documentation.FieldCaption = "Host",
-        Documentation.FieldDescription = "The host name of the Trino coordinator.",
-        Documentation.SampleValues = {"trinohost"}
+        Documentation.FieldDescription = "The host name of the DataOS coordinator.",
+        Documentation.SampleValues = {"DataOS Host"}
     ]),
     Port as (type number meta [
         DataSource.Path = true,
         Documentation.FieldCaption = "Port",
-        Documentation.FieldDescription = "The port to connect the Trino coordinator. Default: http=8080, https=8443",
-        Documentation.SampleValues = {8080}
+        Documentation.FieldDescription = "The port to connect the DataOS coordinator. Default: http=7432, https=7432",
+        Documentation.SampleValues = {7432}
     ]),
     optional Catalog as (type text meta [
         DataSource.Path = false,
         Documentation.FieldCaption = "Catalog",
         Documentation.FieldDescription = "The catalog name to run queries against. Default: All",
-        Documentation.SampleValues = {"Hive"}
+        Documentation.SampleValues = {"icebase"}
     ]),
     optional User as (type text meta [
         DataSource.Path = false,
         Documentation.FieldCaption = "User",
-        Documentation.FieldDescription = "The user name associated with the query. Default: TrinoPBI",
-        Documentation.SampleValues = {"TrinoPBI"}
+        Documentation.FieldDescription = "The user name associated with the query. Default: DataOS User",
+        Documentation.SampleValues = {"DataOS User"}
     ]),
     optional Retries as (type number meta [
         DataSource.Path = false,
@@ -50,23 +49,28 @@ shared TrinoType = type function (
         Documentation.FieldCaption = "Timeout",
         Documentation.FieldDescription = "The maximum time to wait in seconds for the host to send data before giving up. Default: 100",
         Documentation.SampleValues = {100}
+    ]),
+    optional CustomSql as (type text meta [
+        DataSource.Path = false,
+        Documentation.FieldCaption = "Enter your Custom SQL Query"
     ])
     )
     as table meta [
-        Documentation.Name = "Trino",
+        Documentation.Name = "DataOS",
         Documentation.LongDescription = "Trino Client REST API"        
     ];
 
-DefaultUser = "TrinoPBI";
+DefaultUser = "DataOS User";
 DefaultRetries = 5;
 DefaultTimeout = 100;
 DefaultDelayAPICallRetry = #duration(0,0,0,1/2);
-Http = if (Extension.CurrentCredential()[AuthenticationKind]?) = "UsernamePassword" then "https://" else "http://";
+Http = if (Extension.CurrentCredential()[AuthenticationKind]?) = "Implicit" then "http://" else "https://";
 
-TrinoImpl = (Host as text, Port as number, optional Catalog as text, optional User as text, optional Retries as number, optional Timeout as number) as table =>
+TrinoImpl = (Host as text, Port as number, optional Catalog as text, optional User as text, optional Retries as number, optional Timeout as number, optional CustomSql as text) as table =>
     let
         Url = Http & Host & ":" & Number.ToText(Port) & "/v1/statement",
-        Table = TrinoNavTable(Url, Catalog, User, Retries, Timeout)
+        Table = if CustomSql <> null then TrinoExecuteQuery(Url, CustomSql, User, Retries, Timeout)
+                else TrinoNavTable(Url, Catalog, User, Retries, Timeout)
     in
         Table;
 
@@ -383,13 +387,58 @@ TrinoNavTableLeafLeaf = (url as text, Catalog as text, Schema as text, optional 
         AsNavigationView;  
 
 
+TrinoExecuteQuery = (url as text, CustomSql as text, optional user as text, optional retries as number, optional timeout as number) as table =>
+    let
+        user = if user is null and (Extension.CurrentCredential()[AuthenticationKind]?) <> "UsernamePassword" then DefaultUser 
+               else if user is null and (Extension.CurrentCredential()[AuthenticationKind]?) = "UsernamePassword" then Extension.CurrentCredential()[Username] 
+               else user,
+        retries = 3, // Hardcoded value for the number of retries
+        timeout = 30, // Hardcoded value for the timeout duration in seconds
+        response = Value.WaitFor(
+            (iteration) =>
+                let
+                    isRetry = if iteration > 0 then true else false,
+                    response = Web.Contents(url,
+                        [
+                            Content = Text.ToBinary(CustomSql),
+                            Headers = [#"X-Trino-User" = user],
+                            Timeout = #duration(0, 0, 0, timeout),
+                            IsRetry = isRetry
+                        ]
+                    ),
+                    buffered = Binary.Buffer(response),
+                    responseCode = Value.Metadata(response)[Response.Status],
+                    actualResult = if buffered <> null and responseCode = 200 then buffered else null
+                in
+                    actualResult,
+            (iteration) => DefaultDelayAPICallRetry,
+            retries
+        ),
+        body = Json.Document(response),
+        source = if Record.HasFields(body, {"error"}) then error body[error][message] else GetAllPagesByNextLink(body[nextUri], user, retries, timeout)
+    in
+        source;
+
+
 //////////////////////
 //// DATA SOURCE /////
 //////////////////////
 
+// OAuth2 values
+redirect_uri = "https://oauth.powerbi.com/views/oauthredirect.html";
+client_id = Text.FromBinary(Extension.Contents("oauth_config_client_id.txt"));
+client_secret = Text.FromBinary(Extension.Contents("oauth_config_client_secret.txt"));
+authorize_uri = Text.FromBinary(Extension.Contents("oauth_config_authorize_uri.txt"));
+scopes = Text.FromBinary(Extension.Contents("oauth_config_scopes.txt"));
+token_uri = Text.FromBinary(Extension.Contents("oauth_config_token_uri.txt"));
+
 //Data Source Kind description
-Trino = [
+DataOS = [
     Authentication = [
+        OAuth = [
+            StartLogin = StartLogin,
+            FinishLogin = FinishLogin
+        ],
         UsernamePassword = [
             UsernameLabel = Extension.LoadString("UsernameLabelText"),
             PasswordLabel = Extension.LoadString("PasswordLabelText")
@@ -403,11 +452,57 @@ Trino = [
             port = json[Port]
         in
             { "Trino.Contents", host, port }
-    //Label = "Trino"
+    //Label = "DataOS"
 ];
 
+// OAuth helper functions: StartLogin, FinishLogin, Token Method
+StartLogin = (resourceUrl, state, display) =>
+    let
+        AuthorizeUrl = authorize_uri & "?" & Uri.BuildQueryString([
+            response_type = "code",
+            client_id = client_id,  
+            redirect_uri = redirect_uri,
+            state = state,
+            scope = scopes
+        ])
+    in
+        [
+            LoginUri = AuthorizeUrl,
+            CallbackUri = redirect_uri,
+            WindowHeight = 720,
+            WindowWidth = 1024,
+            Context = null
+        ];
+
+FinishLogin = (context, callbackUri, state) =>
+    let
+        Parts = Uri.Parts(callbackUri)[Query]
+    in
+        TokenMethod(Parts[code]);
+
+// Base64Encode(client_id:client_secret)
+// https://docs.aws.amazon.com/cognito/latest/developerguide/token-endpoint.html
+client_id_secret = client_id & ":" & client_secret;
+client_id_secret_bytes = Text.ToBinary(client_id_secret);
+client_id_secret_base64 = Binary.ToText(client_id_secret_bytes);
+
+TokenMethod = (code) =>
+    let
+        Response = Web.Contents(token_uri, [
+            Content = Text.ToBinary(Uri.BuildQueryString([
+                grant_type = "authorization_code",
+                client_id = client_id,
+                code = code,
+                redirect_uri = redirect_uri])),
+            Headers=[
+                #"Content-Type" = "application/x-www-form-urlencoded",
+                #"Authorization" = "Basic " & client_id_secret_base64]]),
+        Parts = Json.Document(Response)
+    in
+        Parts;
+
 // Data Source UI publishing description
-Trino.Publish = [
+DataOS.Publish = [
     Beta = true,
     Category = "Database",
     ButtonText = { Extension.LoadString("ButtonTitle"), Extension.LoadString("ButtonHelp") },
@@ -417,8 +512,8 @@ Trino.Publish = [
 ];
 
 Trino.Icons = [
-    Icon16 = { Extension.Contents("Trino16.png"), Extension.Contents("Trino20.png"), Extension.Contents("Trino24.png"), Extension.Contents("Trino32.png") },
-    Icon32 = { Extension.Contents("Trino32.png"), Extension.Contents("Trino40.png"), Extension.Contents("Trino48.png"), Extension.Contents("Trino64.png") }
+    Icon16 = { Extension.Contents("Modern16.png"), Extension.Contents("Modern20.png"), Extension.Contents("Modern24.png"), Extension.Contents("Modern32.png") },
+    Icon32 = { Extension.Contents("Modern32.png"), Extension.Contents("Modern40.png"), Extension.Contents("Modern48.png"), Extension.Contents("Modern64.png") }
 ]; 
 
 //////////////////////

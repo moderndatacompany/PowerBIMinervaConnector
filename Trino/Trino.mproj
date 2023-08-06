@@ -41,28 +41,28 @@
     <Compile Include="Trino.pq">
       <SubType>Code</SubType>
     </Compile>
-    <Compile Include="Trino16.png">
+    <Compile Include="Modern16.png">
       <SubType>Code</SubType>
     </Compile>
-    <Compile Include="Trino20.png">
+    <Compile Include="Modern20.png">
       <SubType>Code</SubType>
     </Compile>
-    <Compile Include="Trino24.png">
+    <Compile Include="Modern24.png">
       <SubType>Code</SubType>
     </Compile>
-    <Compile Include="Trino32.png">
+    <Compile Include="Modern32.png">
       <SubType>Code</SubType>
     </Compile>
-    <Compile Include="Trino40.png">
+    <Compile Include="Modern40.png">
       <SubType>Code</SubType>
     </Compile>
-    <Compile Include="Trino48.png">
+    <Compile Include="Modern48.png">
       <SubType>Code</SubType>
     </Compile>
-    <Compile Include="Trino64.png">
+    <Compile Include="Modern64.png">
       <SubType>Code</SubType>
     </Compile>
-    <Compile Include="Trino80.png">
+    <Compile Include="Modern80.png">
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="resources.resx">
@@ -111,7 +111,7 @@
     <MakeDir Directories="$(OutputPath)" />
     <Copy SourceFiles="@(NonPQFiles)" DestinationFolder="$(IntermediateOutputPath)" />
     <Copy SourceFiles="@(PQFiles)" DestinationFiles="@(PQFiles->'$(IntermediateOutputPath)%(RecursiveDir)%(FileName).m')" />
-    <BuildExtension InputDirectory="$(IntermediateOutputPath)" OutputFile="$(OutputPath)\$(ProjectName).mez" />
+    <BuildExtension InputDirectory="$(IntermediateOutputPath)" OutputFile="$(OutputPath)\DataOS.mez" />
   </Target>
   <Target Name="ExtensionClean">
     <!-- Remove obj folder -->
